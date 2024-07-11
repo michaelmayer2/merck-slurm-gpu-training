@@ -1,0 +1,115 @@
+---
+title: "cmdstanr"
+output:
+  html_document:
+    df_print: paged
+---
+
+This is an example on how to use [cmdstanr](https://mc-stan.org/cmdstanr/).
+
+We will run it on CPU as well as GPU to compare the performance 
+
+# Our model
+
+We will use `bernoulli_logit_glm` (model from the `cmdstanr` vignette)[https://raw.githubusercontent.com/stan-dev/cmdstanr/master/vignettes/articles-online-only/opencl-files/bernoulli_logit_glm.stan] and have saved it in this folder as  `model.stan`. 
+
+# Data generation
+
+```{r}
+n <- 250000
+k <- 20
+X <- matrix(rnorm(n * k), ncol = k)
+y <- rbinom(n, size = 1, prob = plogis(3 * X[,1] - 2 * X[,2] + 1))
+mdata <- list(k = k, n = n, y = y, X = X)
+```
+
+
+# CPU run
+
+## Prerequisites (one-time setup)
+
+First of all, you need to install the `cmdstanr` package. This can be achieved by running 
+
+```{r message=FALSE, warning=FALSE}
+renv::install('cmdstanr', repos = c('https://stan-dev.r-universe.dev', getOption("repos")), prompt=FALSE)
+```
+
+Then you need to install `cmdstan`. We are making use of all the cores we have available via the `parallelly` package. Compiling C++ code is inherently slow so let's make sure we use all available resources. Additionally we are specifying a specific `cmdstan` version for both good practice and increased reproducibility. 
+
+```{r message=FALSE, warning=FALSE}
+library(cmdstanr)
+if (!dir.exists(paste0(Sys.getenv("HOME"),"/.cmdstan/cmdstan-2.34.1"))) {
+cmdstanr::install_cmdstan(
+  version = "2.34.1", 
+  cores = parallelly::availableCores()
+  )
+}
+```
+
+Please note you always can rebuild cmdstan via the `rebuild_cmdstan()` function. 
+
+
+## Compile the model 
+
+```{r}
+cmdstanr::set_cmdstan_path(paste(Sys.getenv("HOME"),".cmdstan/cmdstan-2.34.1",sep="/"))
+mod_cpu <- cmdstanr::cmdstan_model("model.stan",compile=FALSE)
+mod_cpu$exe_file("model-cpu")
+mod_cpu$compile()
+```
+
+## Run the model
+
+```{r}
+time_cpu<-system.time(fit_cpu <- mod_cpu$sample(data = mdata, chains = 4, parallel_chains = 4, refresh = 0))
+```
+
+# GPU run 
+
+## Prerequisites (one-time setup)
+
+`cmdstan` uses OpenCL to make use of a GPU. We will need to build `cmdstan` and link against OpenCL. 
+
+```{r}
+cmdstan_dir = "~/.cmdstan-gpu"
+
+if (!dir.exists(paste0(cmdstan_dir, "/cmdstan-2.34.1"))) {
+  cpp_options = list("LDFLAGS+= -lOpenCL")
+  
+  
+  dir.create(cmdstan_dir)
+  cmdstanr::install_cmdstan(
+    version = "2.34.1",
+    dir = cmdstan_dir,
+    cpp_options = cpp_options,
+    cores = parallelly::availableCores()
+  )
+}
+```
+
+For each `cmdstan` execution leveraging GPUs we now have to point to this `cmdstan` install
+
+```{r}
+cmdstanr::set_cmdstan_path(paste(cmdstan_dir,"cmdstan-2.34.1",sep="/"))
+```
+
+## Compile the model 
+
+```{r}
+cmdstanr::set_cmdstan_path(paste(cmdstan_dir,"cmdstan-2.34.1",sep="/"))
+mod_gpu <- cmdstanr::cmdstan_model("model.stan",compile=FALSE)
+mod_gpu$exe_file("model-gpu")
+mod_gpu$compile(cpp_options = list(stan_opencl = TRUE))
+```
+
+## Run the model
+
+```{r}
+time_gpu<-system.time(fit_gpu <- mod_gpu$sample(data = mdata, chains = 4, parallel_chains = 4, refresh = 0))
+```
+
+# Compare CPU with GPU
+
+```{r}
+time_cpu/time_gpu
+```
