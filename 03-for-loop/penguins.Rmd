@@ -1,0 +1,263 @@
+---
+title: "for(each) loops"
+output: html_document
+date: "2024-07-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Compute function 
+
+We use the palmerpenguins dataset to calculate some `glm`.
+
+```{r}
+compute <- function(n) {
+  library(palmerpenguins)
+  library(dplyr)
+  peng <- penguins %>% 
+    mutate(
+      species = as.factor(species),
+      sex = as.factor(sex)
+    ) %>% 
+    sample_n(100)
+  glm(body_mass_g ~ species + sex, data = peng)
+}
+```
+
+We can run this now and get some result 
+
+```{r}
+compute(1)
+```
+
+## Run multiple times 
+
+```{r}
+samples<-1000
+res<-list()
+for(i in 1:samples) 
+{
+ res[[i]]<-compute(i) 
+}
+```
+
+
+## Postprocessing
+
+```{r}
+post_processing <- function(res, samples) {
+  # create new data
+  new_dat <- tibble::tribble(~ species, ~ sex, "Chinstrap", "male")
+  
+  # create prediction for each of the models
+  library(purrr)
+  library(tibble)
+  preds <- tibble(mass = map_dbl(res, predict, new_dat))
+  
+  # plot the result
+  library(ggplot2)
+  ggplot(preds, aes(x = mass)) +
+    geom_histogram(bins = samples / 50) +
+    ggtitle("Ensemble model prediction of mass of male Chinstrap penguins")
+  
+}
+```
+
+Let's run it on our current results 
+
+```{r}
+post_processing(res,samples)
+```
+
+
+## foreach
+
+### Naive start 
+
+```{r}
+library(foreach)
+samples=10
+res<-foreach(i=1:samples) %do% {
+  compute(i)
+}
+```
+
+Let's rerun again 
+
+```{r}
+library(foreach)
+samples=10
+res2<-foreach(i=1:samples) %do% {
+  compute(i)
+}
+```
+
+Compare results 
+
+```{r}
+identical(res[[1]]$coefficients,res2[[1]]$coefficients)
+```
+
+Oh wow, something not quite right - let's set random seed
+
+### Improvements 
+
+```{r}
+library(foreach)
+set.seed(1234)
+samples=10
+res<-foreach(i=1:samples) %do% {
+  compute(i)
+}
+```
+
+Let's rerun again 
+
+```{r}
+library(foreach)
+set.seed(1234)
+samples=10
+res2<-foreach(i=1:samples) %do% {
+  compute(i)
+}
+```
+
+Compare results 
+
+```{r}
+identical(res[[1]]$coefficients,res2[[1]]$coefficients)
+```
+
+
+Looking much better ! 
+
+### Let's go parallel
+
+First we need to register a parallel backend. For sake of simplicity we use `doMC` here. 
+
+```{r}
+library(doMC)
+registerDoMC(parallelly::availableCores())
+library(foreach)
+set.seed(1234)
+samples=10
+res<-foreach(i=1:samples) %dopar% {
+  compute(i)
+}
+```
+
+Let's rerun for good measure
+```{r}
+library(doMC)
+registerDoMC(parallelly::availableCores())
+library(foreach)
+set.seed(1234)
+samples=10
+res2<-foreach(i=1:samples) %dopar% {
+  compute(i)
+}
+```
+
+Compare results 
+
+```{r}
+identical(res[[1]]$coefficients,res2[[1]]$coefficients)
+```
+Very bad - we broke it again ! 
+
+### More Improvements 
+
+For consistent random number generation when using parallel computing, use the `doRNG` package and `%dorng%` operator ! 
+
+```{r}
+library(doRNG)
+library(doMC)
+registerDoMC(parallelly::availableCores())
+library(foreach)
+set.seed(1234)
+samples=10
+res<-foreach(i=1:samples) %dorng% {
+  compute(i)
+}
+```
+
+Let's rerun for good measure
+```{r}
+library(doRNG)
+library(doMC)
+registerDoMC(parallelly::availableCores())
+library(foreach)
+set.seed(1234)
+samples=10
+res2<-foreach(i=1:samples) %dorng% {
+  compute(i)
+}
+```
+
+Compare results 
+
+```{r}
+identical(res[[1]]$coefficients,res2[[1]]$coefficients)
+```
+
+Yay - finally we are consistent. 
+
+
+## Performance comparison single core and parallel 
+
+```{r}
+library(foreach)
+set.seed(1234)
+samples=1000
+time_single<-system.time( 
+  res<-foreach(i=1:samples) %do% {
+    compute(i)
+  }
+)
+```
+
+```{r}
+library(doRNG)
+library(doMC)
+registerDoMC(parallelly::availableCores())
+library(foreach)
+set.seed(1234)
+samples=1000
+time_multiple<-system.time(
+  res2<-foreach(i=1:samples) %dorng% {
+    compute(i)
+  }
+)
+```
+
+Compare times 
+
+```{r}
+time_single[3]/time_multiple[3]
+```
+Our parallel code is faster ! (always look at the "elapsed" time only)
+
+## Scalability study
+
+```{r}
+library(doRNG)
+library(doMC)
+cores_available<-parallelly::availableCores()
+times <- c()
+for (i in 1:cores_available)
+{
+  registerDoMC(i)
+  library(foreach)
+  set.seed(1234)
+  samples = 1000
+  times[i] <- system.time(res2 <- foreach(i = 1:samples) %dorng% {
+    compute(i)
+  })[3]
+}
+
+plot(seq(1:cores_available),seq(1:cores_available),xlab="number of cores",ylab="relative speedup",type="l")
+lines(times[1]/times,type="c")
+lines(times[1]/times,type="p")
+```
