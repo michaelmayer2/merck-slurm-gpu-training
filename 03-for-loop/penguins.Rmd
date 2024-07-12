@@ -139,7 +139,7 @@ First we need to register a parallel backend. For sake of simplicity we use `doM
 
 ```{r}
 library(doMC)
-registerDoMC(parallelly::availableCores())
+registerDoMC(min(4,parallelly::availableCores()))
 library(foreach)
 set.seed(1234)
 samples=10
@@ -151,7 +151,7 @@ res<-foreach(i=1:samples) %dopar% {
 Let's rerun for good measure
 ```{r}
 library(doMC)
-registerDoMC(parallelly::availableCores())
+registerDoMC(min(4,parallelly::availableCores()))
 library(foreach)
 set.seed(1234)
 samples=10
@@ -174,7 +174,7 @@ For consistent random number generation when using parallel computing, use the `
 ```{r}
 library(doRNG)
 library(doMC)
-registerDoMC(parallelly::availableCores())
+registerDoMC(min(4,parallelly::availableCores()))
 library(foreach)
 set.seed(1234)
 samples=10
@@ -187,7 +187,7 @@ Let's rerun for good measure
 ```{r}
 library(doRNG)
 library(doMC)
-registerDoMC(parallelly::availableCores())
+registerDoMC(min(4,parallelly::availableCores()))
 library(foreach)
 set.seed(1234)
 samples=10
@@ -221,7 +221,7 @@ time_single<-system.time(
 ```{r}
 library(doRNG)
 library(doMC)
-registerDoMC(parallelly::availableCores())
+registerDoMC(min(4,parallelly::availableCores()))
 library(foreach)
 set.seed(1234)
 samples=1000
@@ -241,6 +241,8 @@ Our parallel code is faster ! (always look at the "elapsed" time only)
 
 ## Scalability study
 
+
+
 ```{r}
 library(doRNG)
 library(doMC)
@@ -251,10 +253,11 @@ for (i in 1:cores_available)
   registerDoMC(i)
   library(foreach)
   set.seed(1234)
-  samples = 1000
-  times[i] <- system.time(res2 <- foreach(i = 1:samples) %dorng% {
-    compute(i)
+  samples = 10000
+  times[i] <- system.time(foreach(j = 1:samples) %dorng% {
+    compute(j)
   })[3]
+  gc()
 }
 
 plot(seq(1:cores_available),seq(1:cores_available),xlab="number of cores",ylab="relative speedup",type="l")
