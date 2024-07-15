@@ -1,0 +1,134 @@
+---
+title: "for(each) loops"
+output: html_document
+date: "2024-07-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Compute function 
+
+We use the palmerpenguins dataset to calculate some `glm`.
+
+```{r}
+compute <- function(n) {
+  library(palmerpenguins)
+  peng <- as.data.frame(penguins) %>% 
+    mutate(
+      species = as.factor(species),
+      sex = as.factor(sex)
+    ) %>% 
+    sample_n(100)
+  glm(body_mass_g ~ species + sex, data = peng)
+}
+```
+
+We can run this now and get some result 
+
+```{r}
+library(palmerpenguins)
+library(dplyr)
+compute(1)
+```
+
+## Run multiple times parallel
+
+Insteod of running this via `foreach` and `doMC`, we now use `clustermq`. We will have to tell `clustermq` that we want to use SLURM and add a template which will keep all SLURM specific stuff contained. 
+
+```{r}
+options(
+    clustermq.scheduler = "slurm",
+    clustermq.template = "slurm.tmpl" 
+)
+```
+
+We now load the library `clustermq` and `foreach` and register `clustermq` as parallel backend 
+```{r}
+library(clustermq)
+library(foreach)
+library(doRNG)
+
+# Register parallel backend to foreach
+register_dopar_cmq(
+  n_jobs = 8,
+  log_worker = FALSE,
+  verbose = FALSE,
+  chunk_size = 10
+)
+```
+
+Finally we run the same code as in the previous example 
+
+```{r}
+library(dplyr)
+samples=1000
+res<-foreach(i = 1:samples) %dorng% {
+  compute(i)
+}
+```
+
+## Postprocessing
+
+```{r}
+post_processing <- function(res, samples) {
+  # create new data
+  new_dat <- tibble::tribble(~ species, ~ sex, "Chinstrap", "male")
+  
+  # create prediction for each of the models
+  library(purrr)
+  library(tibble)
+  preds <- tibble(mass = map_dbl(res, predict, new_dat))
+  
+  # plot the result
+  library(ggplot2)
+  ggplot(preds, aes(x = mass)) +
+    geom_histogram(bins = samples / 50) +
+    ggtitle("Ensemble model prediction of mass of male Chinstrap penguins")
+  
+}
+```
+
+Let's run it on our current results 
+
+```{r}
+post_processing(res,samples)
+```
+
+
+
+## Scalability study
+
+
+
+```{r}
+cores_available<-10
+times <- c()
+for (i in 1:cores_available)
+{
+  # Register parallel backend to foreach
+register_dopar_cmq(
+  n_jobs = i,
+  log_worker = FALSE,
+  verbose = FALSE,
+  chunk_size = 100
+)
+  set.seed(1234)
+  samples = 10000
+  times[i] <- system.time(foreach(j = 1:samples) %dorng% {
+    compute(j)
+  })[3]
+  gc()
+}
+
+plot(seq(1:cores_available),seq(1:cores_available),xlab="number of cores",ylab="relative speedup",type="l")
+lines(times[1]/times,type="c")
+lines(times[1]/times,type="p")
+```
+
+
+## main differences to `doMC` 
+
+* no monolithic jobs, each `n_jobs` is a separate SLURM job. Even if you wanted to run on 32 cores but only 23 are available, `clustermq` will still run and adaptively use only the running jobs for the calculation. This will still give you some results although not with the desired performance. If more cores become available, the will automatically be used
+* `clustermq` jobs can be launched directly from the R console in the IDE session.  
